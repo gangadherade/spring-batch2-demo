@@ -1,4 +1,5 @@
 package com.example.springbatch2demo.batchscheduler;
+import com.amazonaws.auth.policy.resources.S3ObjectResource;
 import com.example.springbatch2demo.batchscheduler.reader.S3Resource;
 import com.example.springbatch2demo.batchscheduler.reader.S3ResourceLoader;
 import org.apache.commons.io.FileUtils;
@@ -42,6 +43,7 @@ import org.springframework.batch.item.database.JpaItemWriter;
 import org.springframework.batch.item.database.builder.JdbcBatchItemWriterBuilder;
 import org.springframework.batch.item.file.FlatFileItemReader;
 import org.springframework.batch.item.file.MultiResourceItemReader;
+import org.springframework.batch.item.file.ResourceAwareItemReaderItemStream;
 import org.springframework.batch.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.item.file.builder.MultiResourceItemReaderBuilder;
 import org.springframework.batch.item.file.mapping.BeanWrapperFieldSetMapper;
@@ -67,6 +69,7 @@ import javax.sql.DataSource;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
 import java.util.*;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -257,6 +260,9 @@ public class SpringBatchScheduler {
 //                .reader(movieDataReader())
                 .reader(movieDataReader())
                 .processor(asyncMovieDataProcessor())
+                // write a processor   listener that will write errors in moviesfroms3 to a file
+
+                .faultTolerant()
                 .writer(asyncMovieItemWriter())
                 .build();
 
@@ -268,16 +274,127 @@ public class SpringBatchScheduler {
     @StepScope
     public SynchronizedItemStreamReader<MoviesFromS3> movieDataReader() throws IOException {
         SynchronizedItemStreamReader synchronizedItemStreamReader = new SynchronizedItemStreamReader();
+
+        ListObjectsV2Result result = amazonS3Client.listObjectsV2(rawDataS3Bucket, rawDataS3ObjectPrefix);
+        for (S3ObjectSummary objectSummary : result.getObjectSummaries()) {
+            System.out.println(objectSummary.getKey());
+            S3Object object = amazonS3Client.getObject(rawDataS3Bucket, objectSummary.getKey());
+        }
+
+        S3Object[] objects = amazonS3Client.listObjectsV2(rawDataS3Bucket, rawDataS3ObjectPrefix).getObjectSummaries().stream()
+                .map(summary -> amazonS3Client.getObject(summary.getBucketName(), summary.getKey()))
+                .toArray(S3Object[]::new);
+
+        Resource[] resources = new Resource[objects.length];
+        for (int i = 0; i < objects.length; i++) {
+            resources[i] = new S3ObjectResource(objects[i]);
+        }
+
         S3ResourceLoader s3ResourceLoader = new S3ResourceLoader(amazonS3Client);
 
         List<Resource> resourceList = s3ResourceLoader.loadResources(rawDataS3Bucket,rawDataS3ObjectPrefix);
-        Resource[] resources = resourceList.toArray(new Resource[resourceList.size()]);
+//        Resource[] resources = resourceList.toArray(new Resource[resourceList.size()]);
         MultiResourceItemReader<MoviesFromS3> multiResourceItemReader = new MultiResourceItemReader<>();
         multiResourceItemReader.setName("movie-multiResource-Reader");
         multiResourceItemReader.setResources(resources);
         multiResourceItemReader.setDelegate(movieFileItemReader());
         synchronizedItemStreamReader.setDelegate(multiResourceItemReader);
         return synchronizedItemStreamReader;
+    }
+
+    private static class S3ObjectResource implements Resource, ResourceAwareItemReaderItemStream<S3Object> {
+
+        private final S3Object s3Object;
+
+        public S3ObjectResource(S3Object s3Object) {
+            this.s3Object = s3Object;
+        }
+
+        @Override
+        public void setResource(Resource resource) {
+            // do nothing
+        }
+
+        @Override
+        public S3Object read() throws Exception {
+            return s3Object;
+        }
+
+        @Override
+        public void open(org.springframework.batch.item.ExecutionContext executionContext) throws org.springframework.batch.item.ItemStreamException {
+            // do nothing
+        }
+
+        @Override
+        public void update(org.springframework.batch.item.ExecutionContext executionContext) throws org.springframework.batch.item.ItemStreamException {
+            // do nothing
+        }
+
+
+        @Override
+        public String getDescription() {
+            return s3Object.getKey();
+        }
+
+        @Override
+        public boolean isOpen() {
+            return true;
+        }
+
+        @Override
+        public URL getURL() throws IOException {
+            return null;
+        }
+
+        @Override
+        public boolean exists() {
+            return false;
+        }
+
+        @Override
+        public boolean isReadable() {
+            return true;
+        }
+
+        @Override
+        public long contentLength() throws IOException {
+            return s3Object.getObjectMetadata().getContentLength();
+        }
+
+        @Override
+        public long lastModified() throws IOException {
+            return s3Object.getObjectMetadata().getLastModified().getTime();
+        }
+
+        @Override
+        public java.net.URI getURI() throws IOException {
+            return java.net.URI.create(s3Object.getBucketName() + "/" + s3Object.getKey());
+        }
+
+        @Override
+        public File getFile() throws IOException {
+            return null;
+        }
+
+        @Override
+        public Resource createRelative(String relativePath) throws IOException {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public String getFilename() {
+            return s3Object.getKey();
+        }
+
+        @Override
+        public String toString() {
+            return getDescription();
+        }
+
+        @Override
+        public InputStream getInputStream() throws IOException {
+            return null;
+        }
     }
     /** Movie data process Configuration - Start */
 
