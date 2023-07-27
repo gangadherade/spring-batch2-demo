@@ -396,6 +396,22 @@ public class SpringBatchScheduler {
             return null;
         }
     }
+
+    public Resource[] convertS3ObjectListToResourceArray(List<S3Object> s3ObjectList) throws IOException {
+        Resource[] resources = new Resource[s3ObjectList.size()];
+        for (int i = 0; i < s3ObjectList.size(); i++) {
+            S3Object s3Object = s3ObjectList.get(i);
+            byte[] content = s3Object.getObjectContent().readAllBytes();
+            String filename = s3Object.getKey();
+            resources[i] = new ByteArrayResource(content) {
+                @Override
+                public String getFilename() {
+                    return filename;
+                }
+            };
+        }
+        return resources;
+    }
     /** Movie data process Configuration - Start */
 
     // READER
